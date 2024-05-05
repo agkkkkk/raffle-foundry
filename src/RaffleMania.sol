@@ -3,6 +3,7 @@ pragma solidity 0.8.23;
 
 import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/vrf/interfaces/VRFCoordinatorV2Interface.sol";
 import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
+import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
 
 /**
  * @title Raffle Mania Contract
@@ -10,10 +11,11 @@ import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBa
  * @notice Generating random number for lottery system
  * @dev Chainlink VRF for random number generation
  */
-contract RaffleMania is VRFConsumerBaseV2 {
+contract RaffleMania is VRFConsumerBaseV2, AutomationCompatibleInterface {
     error NotEnoughEthSent();
     error TransferFailed();
     error RaffleNotOpen();
+    error RaffleUpkeepNotNeeded();
 
     /** Type Declarations */
     enum RaffleState {
@@ -71,13 +73,25 @@ contract RaffleMania is VRFConsumerBaseV2 {
         emit EnterRaffle(msg.sender);
     }
 
-    function pickWinner() external {
-        if (block.timestamp - _lastTimestamp < _raffleInterval) {
-            revert();
+    function checkUpkeep(
+        bytes memory /* checkData */
+    ) public view returns (bool upkeepNeeded, bytes memory performData) {
+        bool isTimePassed = block.timestamp - _lastTimestamp >= _raffleInterval;
+        bool isRaffleOpen = RaffleState.ONGOING == _raffleState;
+        bool isParticipantEnough = _participants.length > 1;
+
+        upkeepNeeded = (isTimePassed && isRaffleOpen && isParticipantEnough);
+        return (upkeepNeeded, "0x0");
+    }
+
+    function performUpkeep(bytes calldata /* performData */) external {
+        (bool upkeepNeeded, ) = checkUpkeep("");
+        if (!upkeepNeeded) {
+            revert RaffleUpkeepNotNeeded();
         }
 
         _raffleState = RaffleState.CLOSED;
-        uint256 requestId = _vrfCordinator.requestRandomWords(
+        _vrfCordinator.requestRandomWords(
             _gasLaneKeyHash,
             _subscriptionId,
             REQUEST_CONFIRMATION,
@@ -87,7 +101,7 @@ contract RaffleMania is VRFConsumerBaseV2 {
     }
 
     function fulfillRandomWords(
-        uint256 _requestId,
+        uint256 /* _requestId */,
         uint256[] memory _randomWords
     ) internal override {
         uint256 indexOfWinner = _randomWords[0] % _participants.length;
